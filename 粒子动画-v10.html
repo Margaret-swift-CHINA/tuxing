@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>星语心愿 - 全息土星限定版</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #020205; font-family: 'Segoe UI', sans-serif; }
+        canvas { display: block; }
+        
+        /* 摄像头预览与调试层 */
+        .video-container {
+            position: absolute;
+            bottom: 20px; left: 20px;
+            width: 160px; height: 120px;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,0.2);
+            z-index: 90;
+            display: none; 
+        }
+        .input_video { width: 100%; height: 100%; object-fit: cover; }
+        .canvas_debug { position: absolute; top:0; left:0; width: 100%; height: 100%; }
+
+        /* UI 面板 (精简版) */
+        #ui-container {
+            position: absolute;
+            top: 20px; right: 20px;
+            width: 200px;
+            background: rgba(15, 15, 20, 0.6);
+            backdrop-filter: blur(8px);
+            padding: 15px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: white;
+            z-index: 100;
+        }
+        h2 { margin: 0 0 10px 0; font-size: 14px; color: #FFD700; text-align: center; letter-spacing: 2px; }
+        
+        /* 调试开关 */
+        .debug-row { margin-top: 5px; font-size: 12px; color: #aaa; display: flex; align-items: center; justify-content: center; gap: 8px; }
+        .status-row { margin-top:10px; font-size:12px; color:#888; text-align:center; line-height: 1.6;}
+        .highlight { color: #fff; font-weight: bold; }
+
+        /* 浮动文字 (星语) - 固定在屏幕中心，不随3D旋转 */
+        #message-container {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 100%; text-align: center;
+            pointer-events: none; z-index: 50;
+            opacity: 0; transition: opacity 1s ease, transform 1.5s ease;
+        }
+        #message-text {
+            font-family: 'Georgia', serif; font-size: 32px; color: rgba(255, 255, 255, 0.95);
+            text-shadow: 0 0 20px rgba(255, 215, 0, 0.6); letter-spacing: 2px;
+        }
+        #message-sub { font-size: 12px; color: rgba(255,255,255,0.5); margin-top: 10px; letter-spacing: 4px; text-transform: uppercase; }
+
+        /* Loading */
+        #loading {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: #FFD700; font-size: 18px; pointer-events: none; transition: opacity 0.5s;
+            text-align: center;
+        }
+    </style>
+    
+    <!-- 引入库 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <div id="loading">
+        正在构建全息宇宙...<br>
+        <span style="font-size:12px; color:#888">请允许摄像头权限</span>
+    </div>
+
+    <div id="message-container">
+        <div id="message-text"></div>
+        <div id="message-sub">— 浩瀚星河 唯你是念 —</div>
+    </div>
+
+    <div id="ui-container">
+        <h2>交互状态</h2>
+        <div class="status-row">
+            手势: <span id="status-grip" class="highlight">未检测</span><br>
+            视角: <span id="status-view" class="highlight">居中</span>
+        </div>
+        <div class="debug-row">
+            <input type="checkbox" id="debug-toggle"> <label for="debug-toggle">显示调试窗</label>
+        </div>
+    </div>
+
+    <div class="video-container" id="video-debug-box">
+        <video class="input_video"></video>
+        <canvas class="canvas_debug" width="160" height="120"></canvas>
+    </div>
+
+<script>
+    // --- 1. 短语库 ---
+    const phraseLibrary = [
+        "你本是宇宙的一粒星尘，偶然落入人间。", "愿你的生活常温暖，日子总是温柔又闪光。", 
+        "万物皆有裂痕，那是光照进来的地方。", "保持热爱，奔赴山海。", 
+        "星光不问赶路人，时光不负有心人。", "凡是过往，皆为序章。",
+        "生活原本沉闷，但跑起来就有风。", "温柔是宝藏，你也是。",
+        "满眼星辰，皆是你。", "愿你一生努力，一生被爱。", 
+        "把烦恼挂在月亮上，回家睡觉。", "好事总会发生在下个转弯。",
+        "做自己的光，不需要太亮，足以照亮自己就好。", "岁月漫长，值得等待。",
+        "心中有丘壑，眉目作山河。", "这世界很酷，你也是。", 
+        "愿你以渺小启程，以伟大结束。", "你来人间一趟，你要看看太阳。",
+        "所愿皆如愿，所行皆坦途。", "保持心脏震荡，有人等你共鸣。",
+        "你若盛开，清风自来。", "愿你被这个世界温柔以待。", 
+        "梦想是不会发光的，发光的是追梦的你。", "前路漫漫，亦有星光。",
+        "人生值得，未来可期。", "相信相信的力量。"
+    ]; 
+
+    let phraseBag = [];
+    function getUniquePhrase() {
+        if (phraseBag.length === 0) {
+            phraseBag = [...phraseLibrary];
+            for (let i = phraseBag.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [phraseBag[i], phraseBag[j]] = [phraseBag[j], phraseBag[i]];
+            }
+        }
+        return phraseBag.pop();
+    }
+
+    // --- 2. Three.js 场景构建 ---
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x020205, 0.015); // 稍微稀薄一点的雾，让远处粒子可见
+
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    // 初始相机位置
+    const initialCamZ = 35;
+    camera.position.z = initialCamZ;
+    camera.position.y = 2;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    document.body.appendChild(renderer.domElement);
+
+    // 粒子系统配置
+    const particleCount = 18000; // 稍微增加粒子数以增强宇宙感
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array(particleCount * 3);
+    const colors = new Float32Array(particleCount * 3);
+    const sizes = new Float32Array(particleCount);
+    
+    // 数据结构：目标（土星），散开（宇宙）
+    const targets = {
+        positions: new Float32Array(particleCount * 3),
+        colors: new Float32Array(particleCount * 3),
+        sizes: new Float32Array(particleCount)
+    };
+    
+    // 散开状态（全息宇宙）的数据
+    const universe = {
+        positions: new Float32Array(particleCount * 3),
+        colors: new Float32Array(particleCount * 3),
+        sizes: new Float32Array(particleCount)
+    };
+
+    // --- 初始化 全息宇宙 (散开) 状态 ---
+    for (let i = 0; i < particleCount; i++) {
+        // 1. 位置：更广阔的随机分布，形成深空感
+        const range = 250; // 扩散范围
+        universe.positions[i*3] = (Math.random() - 0.5) * range;
+        universe.positions[i*3+1] = (Math.random() - 0.5) * range * 0.6; // Y轴稍微扁一点
+        universe.positions[i*3+2] = (Math.random() - 0.5) * range * 0.8;
+
+        // 2. 颜色与大小：大有小，白光夹杂金光
+        const rnd = Math.random();
+        if (rnd > 0.85) {
+            // 金色粒子 (15%) - 较大
+            universe.colors[i*3] = 1.0;   // R
+            universe.colors[i*3+1] = 0.8; // G
+            universe.colors[i*3+2] = 0.1; // B
+            universe.sizes[i] = Math.random() * 2.5 + 1.5; // 大小 1.5 ~ 4.0
+        } else {
+            // 白色粒子 (85%) - 较小，发光
+            universe.colors[i*3] = 0.9 + Math.random()*0.1; 
+            universe.colors[i*3+1] = 0.9 + Math.random()*0.1;
+            universe.colors[i*3+2] = 1.0;
+            universe.sizes[i] = Math.random() * 0.8 + 0.2; // 大小 0.2 ~ 1.0
+        }
+    }
+
+    // --- Shader Material ---
+    const material = new THREE.ShaderMaterial({
+        uniforms: {
+            pointTexture: { value: createTexture() }
+        },
+        vertexShader: `
+            attribute float size;
+            attribute vec3 customColor;
+            varying vec3 vColor;
+            void main() {
+                vColor = customColor;
+                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                // 距离衰减，让远处的星星更小
+                gl_PointSize = size * (300.0 / -mvPosition.z);
+                gl_Position = projectionMatrix * mvPosition;
+            }
+        `,
+        fragmentShader: `
+            uniform sampler2D pointTexture;
+            varying vec3 vColor;
+            void main() {
+                gl_FragColor = vec4(vColor, 1.0) * texture2D(pointTexture, gl_PointCoord);
+                // 稍微提高discard阈值，让光点更锐利
+                if (gl_FragColor.a < 0.1) discard;
+            }
+        `,
+        blending: THREE.AdditiveBlending,
+        depthTest: false,
+        transparent: true,
+        vertexColors: true
+    });
+
+    function createTexture() {
+        const c = document.createElement('canvas'); c.width=32; c.height=32;
+        const ctx = c.getContext('2d');
+        // 增强核心亮度，制造发光感
+        const g = ctx.createRadialGradient(16,16,0,16,16,16);
+        g.addColorStop(0,'rgba(255,255,255,1)'); 
+        g.addColorStop(0.2,'rgba(255,255,255,0.8)'); 
+        g.addColorStop(0.5,'rgba(255,255,255,0.2)'); 
+        g.addColorStop(1,'rgba(0,0,0,0)');
+        ctx.fillStyle=g; ctx.fillRect(0,0,32,32);
+        const t = new THREE.Texture(c);
+        t.needsUpdate = true;
+        return t;
+    }
+
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('customColor', new THREE.BufferAttribute(colors, 3));
+    geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+    const particles = new THREE.Points(geometry, material);
+    scene.add(particles);
+
+    // --- 3. 生成土星形状 (保持原版逻辑) ---
+    function initSaturnShape() {
+        const tPos = targets.positions;
+        const tCol = targets.colors;
+        const tSize = targets.sizes;
+
+        for (let i = 0; i < particleCount; i++) {
+            let x = 0, y = 0, z = 0, r = 1, g = 1, b = 1, s = 1;
+
+            if(Math.random()<0.6){ // 球体
+                const theta=Math.random()*Math.PI*2; 
+                const phi=Math.acos(2*Math.random()-1); 
+                const R=9; // 土星本体半径
+                x=R*Math.sin(phi)*Math.cos(theta); 
+                y=R*Math.sin(phi)*Math.sin(theta); 
+                z=R*Math.cos(phi);
+                r=0.9;g=0.8;b=0.6; s=1.0; // 土星本体颜色
+            } else { // 环
+                const ang=Math.random()*Math.PI*2; 
+                const R=14+Math.random()*8; // 环半径
+                x=R*Math.cos(ang); 
+                z=R*Math.sin(ang); 
+                y=(Math.random()-0.5)*0.5;
+                // 倾斜处理
+                const ty=y*Math.cos(0.4)-z*Math.sin(0.4); 
+                const tz=y*Math.sin(0.4)+z*Math.cos(0.4); 
+                y=ty; z=tz;
+                r=0.6;g=0.6;b=0.7; s=0.6; // 环颜色
+            }
+
+            tPos[i*3]=x; tPos[i*3+1]=y; tPos[i*3+2]=z;
+            tCol[i*3]=r; tCol[i*3+1]=g; tCol[i*3+2]=b;
+            tSize[i]=s;
+        }
+    }
+
+    // 初始化即生成土星数据
+    initSaturnShape();
+
+    // --- 4. 动画与交互逻辑 ---
+    // 状态变量
+    let gripFactor = 1; // 1=土星(握), 0=宇宙(张)
+    let smoothedGrip = 1;
+    
+    // 视角交互变量
+    let handX = 0.5; // 0.0(左) ~ 1.0(右), 0.5居中
+    let smoothedHandX = 0.5;
+    let cameraAngle = 0;
+
+    let isMessageVisible = false;
+    const msgContainer = document.getElementById('message-container');
+    const msgText = document.getElementById('message-text');
+
+    function animate() {
+        requestAnimationFrame(animate);
+        const time = Date.now() * 0.001;
+
+        // 平滑握拳数值
+        smoothedGrip += (gripFactor - smoothedGrip) * 0.05;
+        // 平滑手部X轴位置
+        smoothedHandX += (handX - smoothedHandX) * 0.05;
+
+        // --- 摄像机控制逻辑 (核心修改) ---
+        // 只有当散开时(smoothedGrip变小)，手势移动才大幅影响视角
+        // 计算目标角度: 手在最左(-0.5)到最右(+0.5) 映射到 -45度到+45度
+        const targetAngle = (smoothedHandX - 0.5) * 1.5; // 1.5弧度 ≈ 85度
+        
+        // 混合逻辑：如果变成土星，视角自动回正(0)；如果是宇宙，跟随手势
+        // (1 - smoothedGrip) 越大，越接近宇宙状态，受手势影响越大
+        const effectiveAngle = targetAngle * (1 - smoothedGrip) * (1 - smoothedGrip); 
+        
+        // 简单的轨道旋转
+        const radius = initialCamZ;
+        camera.position.x = radius * Math.sin(effectiveAngle);
+        camera.position.z = radius * Math.cos(effectiveAngle);
+        camera.lookAt(0, 0, 0);
+
+        // --- 文字显隐逻辑 ---
+        if (smoothedGrip < 0.3 && !isMessageVisible) {
+            isMessageVisible = true;
+            msgText.innerText = getUniquePhrase();
+            msgContainer.style.opacity = 1;
+            msgContainer.style.transform = "translate(-50%, -50%) scale(1)";
+        } else if (smoothedGrip > 0.6 && isMessageVisible) {
+            isMessageVisible = false;
+            msgContainer.style.opacity = 0;
+            msgContainer.style.transform = "translate(-50%, -60%) scale(1.1)";
+        }
+
+        // --- 粒子更新 ---
+        // 只有在变成土星时，整体稍微自转，否则在宇宙模式下不自转（由相机移动代替）
+        if (smoothedGrip > 0.5) {
+            particles.rotation.y += 0.002;
+        }
+
+        const posAttr = geometry.attributes.position;
+        const colAttr = geometry.attributes.customColor;
+        const sizeAttr = geometry.attributes.size;
+
+        for(let i=0; i<particleCount; i++){
+            const ix=i*3;
+            
+            // 宇宙状态 (Scattered) - 增加微小的漂浮动画
+            const sx = universe.positions[ix] + Math.sin(time + i)*0.5;
+            const sy = universe.positions[ix+1] + Math.cos(time + i*0.8)*0.5;
+            const sz = universe.positions[ix+2] + Math.sin(time + i*0.2)*0.5;
+            
+            // 土星状态 (Target)
+            const tx = targets.positions[ix];
+            const ty = targets.positions[ix+1];
+            const tz = targets.positions[ix+2];
+
+            // 插值计算
+            const t = smoothedGrip * smoothedGrip * (3 - 2 * smoothedGrip); // Smoothstep
+
+            posAttr.array[ix] = sx + (tx - sx) * t;
+            posAttr.array[ix+1] = sy + (ty - sy) * t;
+            posAttr.array[ix+2] = sz + (tz - sz) * t;
+
+            // 颜色插值 (宇宙的金/白 <-> 土星色)
+            colAttr.array[ix] = universe.colors[ix] + (targets.colors[ix] - universe.colors[ix])*t;
+            colAttr.array[ix+1] = universe.colors[ix+1] + (targets.colors[ix+1] - universe.colors[ix+1])*t;
+            colAttr.array[ix+2] = universe.colors[ix+2] + (targets.colors[ix+2] - universe.colors[ix+2])*t;
+
+            // 大小插值
+            sizeAttr.array[i] = universe.sizes[i] + (targets.sizes[i] - universe.sizes[i])*t;
+        }
+
+        posAttr.needsUpdate = true;
+        colAttr.needsUpdate = true;
+        sizeAttr.needsUpdate = true;
+        renderer.render(scene, camera);
+    }
+    animate();
+
+    // --- 5. MediaPipe Hands 设置 ---
+    const videoElement = document.getElementsByClassName('input_video')[0];
+    const canvasElement = document.getElementsByClassName('canvas_debug')[0];
+    const canvasCtx = canvasElement.getContext('2d');
+    const statusGrip = document.getElementById('status-grip');
+    const statusView = document.getElementById('status-view');
+
+    function onResults(results) {
+        // 隐藏 loading
+        document.getElementById('loading').style.opacity = 0;
+
+        // 调试绘制
+        if (document.getElementById('debug-toggle').checked) {
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+            if (results.multiHandLandmarks) {
+                for (const landmarks of results.multiHandLandmarks) {
+                    drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 1});
+                    drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 1, radius: 2});
+                }
+            }
+            canvasCtx.restore();
+        }
+
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            const lm = results.multiHandLandmarks[0];
+            const wrist = lm[0]; // 手腕点
+            const tips = [8,12,16,20]; 
+            
+            // 1. 计算开合程度 (Grip)
+            let avgDist = 0;
+            tips.forEach(idx => {
+                const d = Math.sqrt(Math.pow(lm[idx].x - wrist.x, 2) + Math.pow(lm[idx].y - wrist.y, 2));
+                avgDist += d;
+            });
+            avgDist /= 4;
+
+            let val = (0.28 - avgDist) / 0.13;
+            val = Math.max(0, Math.min(1, val)); 
+            gripFactor = val;
+
+            // UI 文字反馈
+            if(val > 0.8) statusGrip.innerText = "握拳 (土星)";
+            else if(val < 0.2) statusGrip.innerText = "张开 (星海)";
+            else statusGrip.innerText = "变换中...";
+
+            // 2. 计算手在屏幕的水平位置 (View Control)
+            // lm[0].x 范围是 0.0 (左) 到 1.0 (右)
+            // 稍微反转一下，让手往左移，视角往左看（即相机往左转，或者说人往左转）
+            // 在3D中，为了看到左边的东西，相机其实应该向右旋转或者保持相机位置逻辑直观
+            // 这里我们采用：手在屏幕左边 -> 相机位置偏左 -> 就像人头向左探视
+            // MediaPipe 默认是镜像的，所以 x 小是在预览画面的右边（如果是自拍模式）。
+            // 通常 camera_utils 会做 flipHorizontal: false，默认可能是镜像。
+            // 我们直接取原始 x。如果手在画面左侧 (x < 0.5)，handX < 0.5。
+            
+            // 增加平滑防止抖动，已经由 smoothedHandX 处理
+            // 修正：MediaPipe 输出的坐标，0通常是画面左侧。
+            // 为了让交互自然：手往左滑，感觉像是在拨动宇宙，或者人往左走。
+            // 设定：手位置直接映射到 handX。
+            handX = 1.0 - wrist.x; // 反转一下，符合镜子直觉（手向右挥，看见右边）
+
+            // UI 状态
+            if(handX < 0.4) statusView.innerText = "视角: 左侧";
+            else if(handX > 0.6) statusView.innerText = "视角: 右侧";
+            else statusView.innerText = "视角: 正中";
+
+        } else {
+            statusGrip.innerText = "未检测";
+            statusView.innerText = "-";
+            // 无人时自动回正
+            gripFactor = 1; // 默认变回土星
+            handX = 0.5;
+        }
+    }
+
+    const hands = new Hands({locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }});
+
+    hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+    });
+
+    hands.onResults(onResults);
+
+    const cameraUtils = new Camera(videoElement, {
+        onFrame: async () => {
+            await hands.send({image: videoElement});
+        },
+        width: 320,
+        height: 240
+    });
+    
+    cameraUtils.start();
+
+    // 调试显示
+    document.getElementById('debug-toggle').addEventListener('change', (e) => {
+        document.getElementById('video-debug-box').style.display = e.target.checked ? 'block' : 'none';
+    });
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+</script>
+</body>
+</html>
